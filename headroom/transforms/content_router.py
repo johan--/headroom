@@ -513,6 +513,16 @@ class ContentRouterConfig:
     # Set to None to use DEFAULT_TOOL_PROFILES from config
     tool_profiles: dict[str, Any] | None = None
 
+    # SmartCrusher configuration override. None → transforms-level
+    # SmartCrusherConfig() defaults. Lets deployments tune the lossless
+    # dispatch threshold and compaction heuristics without constructing
+    # the crusher themselves.
+    smart_crusher: Any | None = None
+
+    # Group search-compressor output by file (`rg --heading` style).
+    # Default False; the proxy enables it in token mode.
+    search_group_by_file: bool = False
+
 
 # Patterns for detecting mixed content
 _CODE_FENCE_PATTERN = re.compile(r"^```(\w*)\s*$", re.MULTILINE)
@@ -1563,7 +1573,10 @@ class ContentRouter(Transform):
                     enabled=self.config.ccr_enabled,
                     inject_retrieval_marker=self.config.ccr_inject_marker,
                 )
-                self._smart_crusher = SmartCrusher(ccr_config=ccr_config)
+                self._smart_crusher = SmartCrusher(
+                    config=self.config.smart_crusher,
+                    ccr_config=ccr_config,
+                )
             except ImportError:
                 logger.debug("SmartCrusher not available")
         return self._smart_crusher
@@ -1572,9 +1585,11 @@ class ContentRouter(Transform):
         """Get SearchCompressor (lazy load)."""
         if self._search_compressor is None:
             try:
-                from .search_compressor import SearchCompressor
+                from .search_compressor import SearchCompressor, SearchCompressorConfig
 
-                self._search_compressor = SearchCompressor()
+                self._search_compressor = SearchCompressor(
+                    SearchCompressorConfig(group_by_file=self.config.search_group_by_file)
+                )
             except ImportError:
                 logger.debug("SearchCompressor not available")
         return self._search_compressor

@@ -80,6 +80,18 @@ def _payload_for_retrieval_log(payload: str) -> dict[str, Any]:
     }
 
 
+# Single source of truth for the retrieval-miss message. Actionable by
+# design: the model still has the marker in context (Read markers carry
+# the file path), so tell it how to recover instead of just reporting
+# the miss.
+CCR_MISS_MESSAGE = (
+    "Entry not found or expired. To recover: if the compression marker "
+    "references a file Read, re-read that file (the path is in the "
+    "marker; disk is the source of truth). If it was command output, "
+    "re-run the command. Store TTL is 30 minutes."
+)
+
+
 @dataclass
 class CompressionEntry:
     """A cached compression entry with metadata for retrieval and feedback."""
@@ -95,7 +107,7 @@ class CompressionEntry:
     tool_call_id: str | None
     query_context: str | None
     created_at: float
-    ttl: int = 300  # 5 minutes default
+    ttl: int = 1800  # 30 minutes default (lockstep with CCRConfig.store_ttl_seconds)
 
     # TOIN integration: Store the tool signature hash for retrieval correlation
     # This MUST match the hash used by SmartCrusher when recording compression
@@ -154,7 +166,7 @@ class CompressionStore:
     def __init__(
         self,
         max_entries: int = 1000,
-        default_ttl: int = 300,
+        default_ttl: int = 1800,
         enable_feedback: bool = True,
         backend: CompressionStoreBackend | None = None,
     ):
@@ -162,10 +174,13 @@ class CompressionStore:
 
         Args:
             max_entries: Maximum number of entries to store.
-            default_ttl: Default TTL in seconds (5 minutes).
+            default_ttl: Default TTL in seconds (30 minutes — session scale).
             enable_feedback: Whether to track retrieval events.
-            backend: Storage backend to use. Defaults to InMemoryBackend.
-                     Custom backends can be passed for persistence (MongoDB, Redis).
+            backend: Storage backend to use. Defaults to InMemoryBackend
+                     when constructed directly; `get_compression_store()`
+                     defaults to SQLiteBackend for restart/multi-worker
+                     safety. Custom backends can be passed for
+                     persistence (MongoDB, Redis).
         """
         # Import here to avoid circular imports
         from .backends import InMemoryBackend
@@ -1102,12 +1117,29 @@ def clear_request_compression_store() -> None:
 def _create_default_ccr_backend() -> CompressionStoreBackend | None:
     """Create a CCR backend from env (e.g. HEADROOM_CCR_BACKEND=redis).
 
-    Loads adapters via setuptools entry point 'headroom.ccr_backend'.
-    Returns None to use default InMemoryBackend.
+    Default (env unset or "sqlite"): SQLiteBackend at
+    ~/.headroom/ccr_store.db — restart-safe and shared across worker
+    processes, which the session-scale 30-minute TTL assumes.
+    "memory" opts back into the in-process dict. Other values load
+    adapters via setuptools entry point 'headroom.ccr_backend'.
+    Returns None to use InMemoryBackend.
     """
     backend_type = (os.environ.get("HEADROOM_CCR_BACKEND") or "").strip().lower()
-    if not backend_type or backend_type == "memory":
+    if backend_type == "memory":
         return None
+    if not backend_type or backend_type == "sqlite":
+        try:
+            from .backends.sqlite import SQLiteBackend
+
+            return SQLiteBackend()
+        except Exception as e:
+            logger.warning(
+                "Failed to initialize SQLite CCR backend (%s); "
+                "falling back to in-memory store. Retrieval will not "
+                "survive proxy restarts.",
+                e,
+            )
+            return None
     try:
         from importlib.metadata import entry_points
 
@@ -1134,7 +1166,7 @@ def _create_default_ccr_backend() -> CompressionStoreBackend | None:
 
 def get_compression_store(
     max_entries: int = 1000,
-    default_ttl: int = 300,
+    default_ttl: int = 1800,
     backend: CompressionStoreBackend | None = None,
 ) -> CompressionStore:
     """Get the compression store instance.

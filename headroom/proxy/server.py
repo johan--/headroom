@@ -62,7 +62,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from headroom._version import __version__
 from headroom.cache.compression_feedback import get_compression_feedback
-from headroom.cache.compression_store import get_compression_store
+from headroom.cache.compression_store import CCR_MISS_MESSAGE, get_compression_store
 from headroom.ccr import (
     CCR_TOOL_NAME,
     # Batch processing
@@ -361,9 +361,12 @@ class HeadroomProxy(
         # ContentRouter, so merge rather than assign.
         if config.exclude_tools:
             router_config.exclude_tools = set(DEFAULT_EXCLUDE_TOOLS) | config.exclude_tools
-        # Token mode: allow compression of older excluded-tool results.
+        # Token mode: allow compression of older excluded-tool results,
+        # and emit search results grouped by file (path once per file
+        # instead of repeated on every match line).
         if is_token_mode(config.mode):
             router_config.protect_recent_reads_fraction = 0.3
+            router_config.search_group_by_file = True
         # `--compress-user-messages` flips the router's default skip rule.
         # Off by default for prefix-cache safety; enabled for workloads where
         # user-message content dominates input (OpenAI/Azure chat with pasted
@@ -2487,7 +2490,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         if query:
             if not store.exists(hash_key, clean_expired=True):
                 raise HTTPException(
-                    status_code=404, detail="Entry not found or expired (TTL: 5 minutes)"
+                    status_code=404, detail=CCR_MISS_MESSAGE
                 )
             # Search within cached content
             results = store.search(hash_key, query)
@@ -2511,7 +2514,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                     "retrieval_count": entry.retrieval_count,
                 }
             raise HTTPException(
-                status_code=404, detail="Entry not found or expired (TTL: 5 minutes)"
+                status_code=404, detail=CCR_MISS_MESSAGE
             )
 
     @app.get("/v1/retrieve/stats")
@@ -2894,7 +2897,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 }
             else:
                 retrieval_data = {
-                    "error": "Entry not found or expired (TTL: 5 minutes)",
+                    "error": CCR_MISS_MESSAGE,
                     "hash": hash_key,
                 }
 
