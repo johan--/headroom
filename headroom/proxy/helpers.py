@@ -1122,6 +1122,10 @@ def _read_rtk_lifetime_stats() -> dict[str, Any] | None:
             [str(rtk_path), "gain", "--project", "--format", "json"],
             capture_output=True,
             text=True,
+            # rtk output is UTF-8 (emoji etc.); without this, Windows decodes
+            # with cp1252 and the reader thread dies with UnicodeDecodeError.
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -1222,6 +1226,9 @@ def _read_lean_ctx_lifetime_stats() -> dict[str, Any] | None:
             [str(lean_ctx_path), "gain", "--json"],
             capture_output=True,
             text=True,
+            # UTF-8 regardless of the Windows console code page (cp1252).
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
         )
         if result.returncode != 0 or not result.stdout.strip():
