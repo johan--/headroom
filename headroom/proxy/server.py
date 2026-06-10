@@ -2489,9 +2489,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
         if query:
             if not store.exists(hash_key, clean_expired=True):
-                raise HTTPException(
-                    status_code=404, detail=CCR_MISS_MESSAGE
-                )
+                raise HTTPException(status_code=404, detail=CCR_MISS_MESSAGE)
             # Search within cached content
             results = store.search(hash_key, query)
             return {
@@ -2513,9 +2511,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                     "tool_name": entry.tool_name,
                     "retrieval_count": entry.retrieval_count,
                 }
-            raise HTTPException(
-                status_code=404, detail=CCR_MISS_MESSAGE
-            )
+            raise HTTPException(status_code=404, detail=CCR_MISS_MESSAGE)
 
     @app.get("/v1/retrieve/stats")
     async def ccr_stats():
